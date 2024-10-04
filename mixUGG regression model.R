@@ -1,6 +1,10 @@
 library(nimble)
 library(TeachingDemos)
 library(MCMCglmm)
+library(ggplot2)
+library(qqplotr)
+
+
 ## Generalized Gama distribution
 dGG <- function(t, scale, shape, tau, log = FALSE){
   val <- log(tau) - (shape*tau)*log(scale) - lgamma(shape) + ((shape*tau) - 1)*log(t) -
@@ -254,6 +258,99 @@ mixUGG=function(kappa1.formula=formula,
 }
 
 
+modelsummary=function(mod){
+  p=ncol(mod$X)
+  p2=ncol(mod$X2)
+  prop=matrix(,nrow=p+p2+3,ncol=6)
+  for(j in 1:(p+p2+3)){
+    prop[j,1]=round(posterior.mode(as.mcmc(mod$mcmc.out$samples[,j])),2)
+    prop[j,2]=round(median(mod$mcmc.out$samples[,j]),2)
+    prop[j,3]=round(mean(mod$mcmc.out$samples[,j]),2)
+    prop[j,4]=round(var(mod$mcmc.out$samples[,j]),4)
+    prop[j,5]=length(which(mod$mcmc.out$samples[,j]>0))/length(mod$mcmc.out$samples[,1])
+    prop[j,6]=paste("[",round(emp.hpd(mod$mcmc.out$samples[,j])[1],3),";",round(emp.hpd(mod$mcmc.out$samples[,j])[2],3),"]")
+  }
+  colnames(prop)<-c("Mode","Median","Mean","Var","P(par>0)","HPD")
+  rownames(prop)<-c(colnames(mod$X),colnames(mod$X2),"delta","tau","theta")
+  return(prop)
+}
 
-
+modelresiduals=function(mod,estimator="Mode",conf=0.95){
+  X=mod$X
+  X2=mod$X2
+  q=mod$q
+  kappa.link=mod$kappa.link
+  if(estimator=="Mode"){
+    if(kappa.link=="logit"){
+      kappa1est=ilogit(X%*%posterior.mode(as.mcmc(mod$mcmc.out$samples[,1:p])))
+      kappa2est=ilogit(X2%*%posterior.mode(as.mcmc(mod$mcmc.out$samples[,(p+1):(p+p2)])))
+    }
+    if(kappa.link=="probit"){
+      kappa1est=iprobit(X%*%posterior.mode(as.mcmc(mod$mcmc.out$samples[,1:p])))
+      kappa2est=iprobit(X2%*%posterior.mode(as.mcmc(mod$mcmc.out$samples[,(p+1):(p+p2)])))
+    }
+    if(kappa.link=="cloglog"){
+      kappa1est=icloglog(X%*%posterior.mode(as.mcmc(mod$mcmc.out$samples[,1:p])))
+      kappa2est=icloglog(X2%*%posterior.mode(as.mcmc(mod$mcmc.out$samples[,(p+1):(p+p2)])))
+    }
+    gamaest=posterior.mode(as.mcmc(mod$mcmc.out$samples[,(p+p2+1)]))
+    thetaest=posterior.mode(as.mcmc(mod$mcmc.out$samples[,(p+p2+3)]))
+    tauest=posterior.mode(as.mcmc(mod$mcmc.out$samples[,(p+p2+2)]))
+    resiquan=qnorm(pmixUGG(y,kappa1est,kappa2est,
+                           gamaest,thetaest,tauest,q=q))
+  }
+  if(estimator=="Median"){
+    if(kappa.link=="logit"){
+      kappa1est=ilogit(X%*%median(mod$mcmc.out$samples[,1:p]))
+      kappa2est=ilogit(X2%*%median(mod$mcmc.out$samples[,(p+1):(p+p2)]))
+    }
+    if(kappa.link=="probit"){
+      kappa1est=iprobit(X%*%median(mod$mcmc.out$samples[,1:p]))
+      kappa2est=iprobit(X2%*%median(mod$mcmc.out$samples[,(p+1):(p+p2)]))
+    }
+    if(kappa.link=="cloglog"){
+      kappa1est=icloglog(X%*%median(mod$mcmc.out$samples[,1:p]))
+      kappa2est=icloglog(X2%*%median(mod$mcmc.out$samples[,(p+1):(p+p2)]))
+    }
+    gamaest=median(mod$mcmc.out$samples[,(p+p2+1)])
+    thetaest=median(mod$mcmc.out$samples[,(p+p2+3)])
+    tauest=median(mod$mcmc.out$samples[,(p+p2+2)])
+    resiquan=qnorm(pmixUGG(y,kappa1est,kappa2est,
+                           gamaest,thetaest,tauest,q=q))
+  }
+  if(estimator=="Mean"){
+    if(kappa.link=="logit"){
+      kappa1est=ilogit(X%*%mean(mod$mcmc.out$samples[,1:p]))
+      kappa2est=ilogit(X2%*%mean(mod$mcmc.out$samples[,(p+1):(p+p2)]))
+    }
+    if(kappa.link=="probit"){
+      kappa1est=iprobit(X%*%mean(mod$mcmc.out$samples[,1:p]))
+      kappa2est=iprobit(X2%*%mean(mod$mcmc.out$samples[,(p+1):(p+p2)]))
+    }
+    if(kappa.link=="cloglog"){
+      kappa1est=icloglog(X%*%mean(mod$mcmc.out$samples[,1:p]))
+      kappa2est=icloglog(X2%*%mean(mod$mcmc.out$samples[,(p+1):(p+p2)]))
+    }
+    gamaest=mean(mod$mcmc.out$samples[,(p+p2+1)])
+    thetaest=mean(mod$mcmc.out$samples[,(p+p2+3)])
+    tauest=mean(mod$mcmc.out$samples[,(p+p2+2)])
+    resiquan=qnorm(pmixUGG(y,kappa1est,kappa2est,
+                           gamaest,thetaest,tauest,q=q))
+  }
+  smpbr <- data.frame(norm = resiquan)
+  s1<-ggplot(data = smpbr, mapping = aes(sample = norm))  +
+    stat_qq_band(conf = conf) +
+    stat_qq_line() +
+    stat_qq_point() +
+    labs(x = "Theoretical Quantiles", y = "Quantile Residuals") +
+    theme(
+      panel.border = element_blank(),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.background = element_blank(),
+      axis.line = element_line(colour = "grey"),
+      text=element_text(size=25,family="serif")
+    )
+  print(s1)
+}
                           
