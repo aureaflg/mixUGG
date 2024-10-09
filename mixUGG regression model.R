@@ -3,6 +3,8 @@ library(TeachingDemos)
 library(MCMCglmm)
 library(ggplot2)
 library(qqplotr)
+library(ggpubr)
+library(ggrepel)
 
 
 ## Generalized Gama distribution
@@ -135,8 +137,8 @@ registerDistributions(list(
 ## There are three available link functions: logit, probit and cloglog, use kappa.link
 ## to set this. With nchains you set the number of MCMC chains, with thin the user can
 ## specify how much the MCMC chains should be thinned out before storing them. niter
-## is used to set the iteraction numbers and nburnin is used to set the burning-in.
-## The argument q is to define which quantile will be modelled 0<q<1.                          
+## is used to set the iteraction numbers and nburnin is used to set the burn-in.
+## The argument q defines which quantile will be modelled (0<q<1).                          
                           
 mixUGG=function(kappa1.formula=formula,
                 kappa2.formula=~1,data=NULL,
@@ -253,11 +255,27 @@ mixUGG=function(kappa1.formula=formula,
                          monitors = c('alpha','beta','gama','tau','theta','z'),
                          summary = TRUE)
   
-  return(list(mcmc.out=mcmc.out,X1=X1,X2=X2,
+  return(list(mcmc.out=mcmc.out,X=X,X2=X2,
                y=y,q=q,kappa.link=kappa.link))
 }
 
 
+## Example of how to use the mixUGG function to fit a mixUGG
+## quantile regression model:  
+## mod=mixUGG(y~x1+x2, kappa2.formula=~x1+x2+x3, q=0.25)    
+                          
+## In mod, y is the response variable, x1, x2, and x3 are covariates
+## y~x1+x2 is the linear predictor related to the mixture component 1,
+## while kappa2.formula=~x1+x2+x3 is related to the mixture component 2.
+## If kappa2.formula was not set by the user, it is assumed the same linear
+## predictor for both components. The default link function is the logit link,
+## and the modelled quantile in this case is the first quartile (default is q=0.5).                          
+
+  
+
+  
+
+# Model fit summary
 modelsummary=function(mod){
   p=ncol(mod$X)
   p2=ncol(mod$X2)
@@ -275,10 +293,31 @@ modelsummary=function(mod){
   return(prop)
 }
 
+# This function returns the proportion of observations calssified in each component
+# as well as the classification of each observation according to the fitted model                          
+classification=function(mod){
+  p=ncol(mod$X)
+  p2=ncol(mod$X2)
+  n=length(mod$y)
+  prop1=table(mod$mcmc.out$summary[(p+p2+4):(p+p2+3+n),2])[1]/n
+  prop2=table(mod$mcmc.out$summary[(p+p2+4):(p+p2+3+n),2])[2]/n
+  aux=data.frame('Proportion of obs coming from comp 1'=prop1,'Proportion of obs coming from comp 2'=prop2)
+  yclass=mod$mcmc.out$summary[(p+p2+4):(p+p2+3+n),2]
+  yclass[yclass==1]=2
+  yclass[yclass==0]=1
+  return(list(proportion=aux,"classification of observations"=yclass))
+}
+# Example: classification(mod)$proportion returns the proportion and
+# classification(mod)$"classification of observations" returns the classification
+# of each observation: 1 for component 1 and 2 for component 2.                         
+
+# Quantile Residuals                          
 modelresiduals=function(mod,estimator="Mode",conf=0.95){
   X=mod$X
   X2=mod$X2
   q=mod$q
+  y=mod$y
+  n=length(y)
   kappa.link=mod$kappa.link
   if(estimator=="Mode"){
     if(kappa.link=="logit"){
@@ -353,4 +392,286 @@ modelresiduals=function(mod,estimator="Mode",conf=0.95){
     )
   print(s1)
 }
+
+# Information criteria
+criteria=function(mod){
+  X=mod$X
+  X2=mod$X2
+  q=mod$q
+  p=ncol(X)
+  p2=ncol(X2)
+  y=mod$y
+  n=length(y)
+  m=length(mod$mcmc.out$samples[,1])
+  aux = matrix(0,m,n)
+  kappa1es=kappa2es=gamaes=thetaes=taues=lppd=pwaic=den=0
+  
+  if(mod$kappa.link=="logit"){
+    for(j in 1:m){
+      kappa1estj=ilogit(X%*%mod$mcmc.out$sample[j,1:p])
+      kappa2estj=ilogit(X2%*%mod$mcmc.out$sample[j,(p+1):(p+p2)])
+      gamaestj=mod$mcmc.out$sample[j,(p+p2+1)]
+      thetaestj=mod$mcmc.out$sample[j,(p+p2+3)]
+      tauestj=mod$mcmc.out$sample[j,(p+p2+2)]
+      for(i in 1:n){
+        aux[j,i] = dmixUGG(y[i],kappa1estj[i],kappa2estj[i],
+                           gamaestj,thetaestj,tauestj,q)
+      }
+    }
+    for(i in 1:n){
+      for(j in 1:m){
+        kappa1es[j]=ilogit(X[i,]%*%mod$mcmc.out$samples[j,1:p])
+        kappa2es[j]=ilogit(X2[i,]%*%mod$mcmc.out$samples[j,(p+1):(p+p2)])
+        gamaes[j]=mod$mcmc.out$samples[j,(p+p2+1)]
+        thetaes[j]=mod$mcmc.out$samples[j,(p+p2+3)]
+        taues[j]=mod$mcmc.out$samples[j,(p+p2+2)]
+        den[j]=dmixUGG(y[i],kappa1es[j],kappa2es[j],gamaes[j],
+                       thetaes[j],taues[j],q)
+      }
+      lppd[i]=log(mean(den))
+      pwaic[i]=var(log(den))
+    }
+    kappa1est=ilogit(X%*%mod$mcmc.out$summary[1:p])
+    kappa2est=ilogit(X2%*%mod$mcmc.out$summary[(p+1):(p+p2)])
+  }
+  if(mod$kappa.link=="probit"){
+    for(j in 1:m){
+      kappa1estj=iprobit(X%*%mod$mcmc.out$sample[j,1:p])
+      kappa2estj=iprobit(X2%*%mod$mcmc.out$sample[j,(p+1):(p+p2)])
+      gamaestj=mod$mcmc.out$sample[j,(p+p2+1)]
+      thetaestj=mod$mcmc.out$sample[j,(p+p2+3)]
+      tauestj=mod$mcmc.out$sample[j,(p+p2+2)]
+      for(i in 1:n){
+        aux[j,i] = dmixUGG(y[i],kappa1estj[i],kappa2estj[i],
+                           gamaestj,thetaestj,tauestj,q)
+      }
+    }
+    for(i in 1:n){
+      for(j in 1:m){
+        kappa1es[j]=iprobit(X[i,]%*%mod$mcmc.out$samples[j,1:p])
+        kappa2es[j]=iprobit(X2[i,]%*%mod$mcmc.out$samples[j,(p+1):(p+p2)])
+        gamaes[j]=mod$mcmc.out$samples[j,(p+p2+1)]
+        thetaes[j]=mod$mcmc.out$samples[j,(p+p2+3)]
+        taues[j]=mod$mcmc.out$samples[j,(p+p2+2)]
+        den[j]=dmixUGG(y[i],kappa1es[j],kappa2es[j],gamaes[j],
+                       thetaes[j],taues[j],q)
+      }
+      lppd[i]=log(mean(den))
+      pwaic[i]=var(log(den))
+    }
+    kappa1est=iprobit(X%*%mod$mcmc.out$summary[1:p])
+    kappa2est=iprobit(X2%*%mod$mcmc.out$summary[(p+1):(p+p2)])
+  }
+  if(mod$kappa.link=="cloglog"){
+    for(j in 1:m){
+      kappa1estj=icloglog(X%*%mod$mcmc.out$sample[j,1:p])
+      kappa2estj=icloglog(X2%*%mod$mcmc.out$sample[j,(p+1):(p+p2)])
+      gamaestj=mod$mcmc.out$sample[j,(p+p2+1)]
+      thetaestj=mod$mcmc.out$sample[j,(p+p2+3)]
+      tauestj=mod$mcmc.out$sample[j,(p+p2+2)]
+      for(i in 1:n){
+        aux[j,i] = dmixUGG(y[i],kappa1estj[i],kappa2estj[i],
+                           gamaestj,thetaestj,tauestj,q)
+      }
+    }
+    for(i in 1:n){
+      for(j in 1:m){
+        kappa1es[j]=icloglog(X[i,]%*%mod$mcmc.out$samples[j,1:p])
+        kappa2es[j]=icloglog(X2[i,]%*%mod$mcmc.out$samples[j,(p+1):(p+p2)])
+        gamaes[j]=mod$mcmc.out$samples[j,(p+p2+1)]
+        thetaes[j]=mod$mcmc.out$samples[j,(p+p2+3)]
+        taues[j]=mod$mcmc.out$samples[j,(p+p2+2)]
+        den[j]=dmixUGG(y[i],kappa1es[j],kappa2es[j],gamaes[j],
+                       thetaes[j],taues[j],q)
+      }
+      lppd[i]=log(mean(den))
+      pwaic[i]=var(log(den))
+    }
+    kappa1est=icloglog(X%*%mod$mcmc.out$summary[1:p])
+    kappa2est=icloglog(X2%*%mod$mcmc.out$summary[(p+1):(p+p2)])
+  }
+  
+  cpo = 1/colMeans(1/aux)
+  LPML=sum(log(cpo)) 
+  gamaest=mod$mcmc.out$summary[(p+p2+1),1]
+  thetaest=mod$mcmc.out$summary[(p+p2+3)]
+  tauest=mod$mcmc.out$summary[(p+p2+2)]
+  lvero=sum(dmixUGG(y,kappa1est,kappa2est,
+                    gamaest,thetaest,tauest,q=q,log=T))
+  EAIC=-2*lvero+2*(p+p2+3);EBIC=-2*lvero+(p+p2+3)*log(n)
+  BARDEV = mean(colSums(t(-2*log(aux))))
+  DEVBAR=-2*lvero
+  DCI = DEVBAR + 2*(BARDEV-DEVBAR)
+  WAIC=-2*(sum(lppd)-sum(pwaic))
+  
+  result=data.frame(EAIC,EBIC,DCI,WAIC,LPML)
+  return(result)
+}
+
+# Bayesian Influence Anlysis
+# Kullback-Leibler divergence                           
+# if you want to highlight a point, use the argument ref to do so                          
+kl=function(mod,ref=0.5){
+  X=mod$X
+  X2=mod$X2
+  q=mod$q
+  p=ncol(X)
+  p2=ncol(X2)
+  y=mod$y
+  n=length(y)
+  m=length(mod$mcmc.out$samples[,1])
+  aux = matrix(0,m,n)
+  if(mod$kappa.link=="logit"){
+    for(j in 1:m){
+      kappa1estj=ilogit(X%*%mod$mcmc.out$sample[j,1:p])
+      kappa2estj=ilogit(X2%*%mod$mcmc.out$sample[j,(p+1):(p+p2)])
+      gamaestj=mod$mcmc.out$sample[j,(p+p2+1)]
+      thetaestj=mod$mcmc.out$sample[j,(p+p2+3)]
+      tauestj=mod$mcmc.out$sample[j,(p+p2+2)]
+      for(i in 1:n){
+        aux[j,i] = dmixUGG(y[i],kappa1estj[i],kappa2estj[i],
+                           gamaestj,thetaestj,tauestj,q)
+      }
+    }
+  }
+  if(mod$kappa.link=="probit"){
+    for(j in 1:m){
+      kappa1estj=iprobit(X%*%mod$mcmc.out$sample[j,1:p])
+      kappa2estj=iprobit(X2%*%mod$mcmc.out$sample[j,(p+1):(p+p2)])
+      gamaestj=mod$mcmc.out$sample[j,(p+p2+1)]
+      thetaestj=mod$mcmc.out$sample[j,(p+p2+3)]
+      tauestj=mod$mcmc.out$sample[j,(p+p2+2)]
+      for(i in 1:n){
+        aux[j,i] = dmixUGG(y[i],kappa1estj[i],kappa2estj[i],
+                           gamaestj,thetaestj,tauestj,q)
+      }
+    }
+  }
+  if(mod$kappa.link=="cloglog"){
+    for(j in 1:m){
+      kappa1estj=icloglog(X%*%mod$mcmc.out$sample[j,1:p])
+      kappa2estj=icloglog(X2%*%mod$mcmc.out$sample[j,(p+1):(p+p2)])
+      gamaestj=mod$mcmc.out$sample[j,(p+p2+1)]
+      thetaestj=mod$mcmc.out$sample[j,(p+p2+3)]
+      tauestj=mod$mcmc.out$sample[j,(p+p2+2)]
+      for(i in 1:n){
+        aux[j,i] = dmixUGG(y[i],kappa1estj[i],kappa2estj[i],
+                           gamaestj,thetaestj,tauestj,q)
+      }
+    }
+  }
+  
+  cpo = 1/colMeans(1/aux)
+  kpp=0
+  for(i in 1:n){
+    kpp[i]=colMeans(log(aux))[i]-log(cpo)[i]
+  }
+  gg<-ggplot() + geom_point(aes(x = 1:n, y = kpp)) +
+    xlab("Subject index") + ylab("KL divergence") +
+    geom_text(aes(x = 1:n, y = kpp, label=ifelse(kpp>ref,1:n,'')),
+              hjust=1.5,vjust=1.5,size=6) +
+    theme_bw() +
+    theme(panel.border = element_blank(),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_blank(),
+          axis.line = element_line(colour = "grey"),
+          text=element_text(size=25,family="serif"))
+  print(gg)
+}
+
+
+# Estimation of parameters related to marginal quantile model
+# The user can set the covariates to be considered in the fit,
+# however, if is not set, the covariates will the same considered
+# for component 1                          
+marginal(mod,kappa3.formula=~1,data=NULL){
+  X=mod$X
+  X2=mod$X2
+  q=mod$q
+  p=ncol(X)
+  p2=ncol(X2)
+  
+  if(kappa3.formula==~1){
+    X3=X
+  }else{
+    if(is.null(data)){
+      X3=model.matrix(kappa3.formula)
+    }else{
+      X3=model.matrix(kappa3.formula,data=data)
+    }
+  }
+  
+  m=length(mod$mcmc.out$samples[,1])
+  gamaest=mod$mcmc.out$samples[,(p+p2+1)]
+  thetaest=mod$mcmc.out$samples[,(p+p2+3)]
+  tauest=mod$mcmc.out$samples[,(p+p2+2)]
+  
+  
+  ff = function(par,kappa1e,kappa2e,gamaest, thetaest, tauest,q){
+    dif=(pmixUGG(par, kappa1e,kappa2e,gamaest, thetaest, tauest,q) - q)^2
+    return(dif)
+  }
+  
+  aux2=matrix(,ncol=ncol(X3),nrow=m)
+  
+  if(mod$kappa.link=="logit"){
+    for(j in 1:n){
+      kappa1e[,j]<-ilogit(X[j,]%*%t(mod$mcmc.out$samples[,1:p]))
+      kappa2e[,j]<-ilogit(X2[j,]%*%t(mod$mcmc.out$samples[,(p+1):(p+p2)]))
+      for(i in 1:m){
+        resu[i,j] <- optim(0.5, ff, method = "L-BFGS-B", kappa1e = kappa1e[i,j], 
+                           kappa2e = kappa2e[i,j],gamaest = gamaest[i], thetaest = thetaest[i],
+                           tauest = tauest[i], q = q,lower = c(0.0001), upper=c(0.9999))$par
+      }
+      
+      print(j)
+    }
+    for(f in 1:m){
+      mod=lm(logit(resu[f,])~X3[,-1])
+      aux2[f,]=mod$coefficients
+    }
+    
+  }
+  if(mod$kappa.link=="probit"){
+    for(j in 1:n){
+      kappa1e[,j]<-iprobit(X[j,]%*%t(mod$mcmc.out$samples[,1:p]))
+      kappa2e[,j]<-iprobit(X2[j,]%*%t(mod$mcmc.out$samples[,(p+1):(p+p2)]))
+      for(i in 1:m){
+        resu[i,j] <- optim(0.5, ff, method = "L-BFGS-B", kappa1e = kappa1e[i,j], 
+                           kappa2e = kappa2e[i,j],gamaest = gamaest[i], thetaest = thetaest[i],
+                           tauest = tauest[i], q = q,lower = c(0.0001), upper=c(0.9999))$par
+      }
+      
+      print(j)
+    }
+    for(f in 1:m){
+      mod=lm(probit(resu[f,])~X3[,-1])
+      aux2[f,]=mod$coefficients
+    }
+    
+  }
+  if(mod$kappa.link=="cloglog"){
+    for(j in 1:n){
+      kappa1e[,j]<-icloglog(X[j,]%*%t(mod$mcmc.out$samples[,1:p]))
+      kappa2e[,j]<-icloglog(X2[j,]%*%t(mod$mcmc.out$samples[,(p+1):(p+p2)]))
+      for(i in 1:m){
+        resu[i,j] <- optim(0.5, ff, method = "L-BFGS-B", kappa1e = kappa1e[i,j], 
+                           kappa2e = kappa2e[i,j],gamaest = gamaest[i], thetaest = thetaest[i],
+                           tauest = tauest[i], q = q,lower = c(0.0001), upper=c(0.9999))$par
+      }
+      
+      print(j)
+    }
+    for(f in 1:m){
+      mod=lm(cloglog(resu[f,])~X3[,-1])
+      aux2[f,]=mod$coefficients
+    }
+    
+  }
+  
+  colnames(aux2)<-colnames(X3)
+  return(aux2)
+}
                           
+                        
