@@ -585,7 +585,7 @@ kl=function(mod,ref=0.5){
 # The user can set the covariates to be considered in the fit,
 # however, if is not set, the covariates will the same considered
 # for component 1                          
-marginal(mod,kappa3.formula=~1,data=NULL){
+marginal=function(mod,kappa3.formula=~1,data=NULL){
   X=mod$X
   X2=mod$X2
   q=mod$q
