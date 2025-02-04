@@ -7,7 +7,7 @@ library(ggpubr)
 library(ggrepel)
 
 
-## Generalized Gama distribution
+## Generalized Gamma distribution
 dGG <- function(t, scale, shape, tau, log = FALSE){
   val <- log(tau) - (shape*tau)*log(scale) - lgamma(shape) + ((shape*tau) - 1)*log(t) -
     (t/scale)^tau
@@ -25,7 +25,7 @@ rGG <- function(n, scale, shape, tau){
   return(as.vector(out))
 }
 
-## mixIGG distribution
+## mixUGG distribution
 dmixUGG <- function(x, kappa1=0.2, kappa2=0.2, gama=2, theta=0.5,tau=2, q=0.5, log = FALSE) {
   n_arg <- max(length(x), length(kappa1), length(kappa2), length(gama), length(theta), length(tau), length(q))
   x <- rep(x, length = n_arg)
